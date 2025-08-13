@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Soulseek Stats Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body class="bg-slate-950 text-slate-100">
+  <div id="app" class="max-w-7xl mx-auto p-6">
+    <header class="mb-6 flex items-center justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold">Soulseek Stats Dashboard</h1>
+        <p class="text-slate-400 text-sm">Select your <code>stats.json</code> file to begin.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input id="file" type="file" accept=".json,application/json" class="hidden" @change="onPickFile" />
+        <button @click="pickFile" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded text-sm border border-slate-700">Load stats.json</button>
+        <button @click="refresh" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1 rounded text-sm">Refresh</button>
+      </div>
+    </header>
+
+    <div v-if="error" class="mb-4 p-3 rounded border border-rose-800 bg-rose-900/30 text-rose-200 text-sm">
+      {{ error }}
+    </div>
+
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6" v-if="loaded">
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800">
+        <p class="text-slate-400 text-xs">Total Transfers</p>
+        <p class="text-2xl font-bold">{{ formatNumber(summary.totalTransfers) }}</p>
+      </div>
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800">
+        <p class="text-slate-400 text-xs">Total Bytes</p>
+        <p class="text-2xl font-bold">{{ formatBytes(summary.totalBytes) }}</p>
+      </div>
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800">
+        <p class="text-slate-400 text-xs">Unique Users</p>
+        <p class="text-2xl font-bold">{{ formatNumber(summary.uniqueUsers) }}</p>
+      </div>
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800">
+        <p class="text-slate-400 text-xs">Unique Files</p>
+        <p class="text-2xl font-bold">{{ formatNumber(summary.uniqueFiles) }}</p>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6" v-if="loaded">
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800 lg:col-span-2">
+        <div class="flex justify-between items-center mb-2">
+          <h2 class="font-semibold">Top Users by Bytes</h2>
+          <select v-model.number="userLimit" @change="renderAll" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm">
+            <option :value="5">Top 5</option>
+            <option :value="10">Top 10</option>
+            <option :value="20">Top 20</option>
+          </select>
+        </div>
+        <canvas id="usersChart" height="140"></canvas>
+      </div>
+
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800">
+        <h2 class="font-semibold mb-2">By File Type</h2>
+        <canvas id="extChart" height="140"></canvas>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6" v-if="loaded">
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800">
+        <h2 class="font-semibold mb-2">Activity by Day of Week</h2>
+        <canvas id="dowChart" height="120"></canvas>
+      </div>
+
+      <div class="bg-slate-900/60 rounded-lg p-4 border border-slate-800 lg:col-span-2">
+        <div class="flex justify-between items-center mb-2">
+          <h2 class="font-semibold">Top Files</h2>
+          <select v-model.number="fileLimit" @change="renderAll" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm">
+            <option :value="5">Top 5</option>
+            <option :value="10">Top 10</option>
+            <option :value="20">Top 20</option>
+          </select>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="text-slate-400">
+              <tr>
+                <th class="text-left py-2">File</th>
+                <th class="text-left py-2">User</th>
+                <th class="text-left py-2">Bytes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="f in topFiles" :key="f.real_path" class="border-t border-slate-800">
+                <td class="py-2">{{ f.display }}</td>
+                <td class="py-2">{{ f.last_user || '—' }}</td>
+                <td class="py-2">{{ formatBytes(f.total_bytes) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="bg-slate-900/60 rounded-lg p-4 border border-slate-800 mb-6" v-if="loaded">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="font-semibold">Recent Activity</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-slate-400">
+            <tr>
+              <th class="text-left py-2">When</th>
+              <th class="text-left py-2">User</th>
+              <th class="text-left py-2">File</th>
+              <th class="text-left py-2">Bytes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in recent" :key="r.real_path + r.last_modified" class="border-t border-slate-800">
+              <td class="py-2">{{ timeAgo(r.last_modified) }}</td>
+              <td class="py-2">{{ r.last_user || '—' }}</td>
+              <td class="py-2">{{ r.display }}</td>
+              <td class="py-2">{{ formatBytes(r.total_bytes) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="text-xs text-slate-500">
+      <span v-if="loaded">Last updated: {{ lastUpdatedText }}</span>
+      <span v-else>Click “Load stats.json” to select your stats file.</span>
+    </footer>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, nextTick } = Vue
+
+    function formatBytes(n) {
+      if (!n || n <= 0) return '0 B'
+      const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+      const e = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1)
+      return `${(n / Math.pow(1024, e)).toFixed(e === 0 ? 0 : 2)} ${units[e]}`
+    }
+    function formatNumber(n) { return (n || 0).toLocaleString() }
+    function timeAgo(sec) {
+      if (!sec) return '—'
+      const ms = sec < 1e12 ? sec * 1000 : sec
+      const diff = Date.now() - ms
+      if (diff < 60e3) return 'just now'
+      const mins = Math.floor(diff / 60e3)
+      if (mins < 60) return `${mins}m ago`
+      const hrs = Math.floor(mins / 60)
+      if (hrs < 24) return `${hrs}h ago`
+      const days = Math.floor(hrs / 24)
+      if (days < 7) return `${days}d ago`
+      return new Date(ms).toLocaleString()
+    }
+    function getExt(p) {
+      const m = /\.([^.\/\\?#]+)$/.exec(p || '')
+      return m ? ('.' + m[1].toLowerCase()) : 'unknown'
+    }
+
+    createApp({
+      setup() {
+        const loaded = ref(false)
+        const error = ref('')
+        const raw = ref(null)
+        const summary = ref({ totalTransfers: 0, totalBytes: 0, uniqueUsers: 0, uniqueFiles: 0, lastUpdated: 0, dayOfWeek: [] })
+        const topUsers = ref([])
+        const topFiles = ref([])
+        const recent = ref([])
+        const userLimit = ref(10)
+        const fileLimit = ref(10)
+        let usersChart, extChart, dowChart
+
+        const lastUpdatedText = computed(() =>
+          summary.value.lastUpdated ? new Date((summary.value.lastUpdated < 1e12 ? summary.value.lastUpdated * 1000 : summary.value.lastUpdated)).toLocaleString() : '—'
+        )
+
+        function summarize(stats) {
+          const files = stats.file || {}
+          const users = stats.user || {}
+          const day = Array.isArray(stats.day) ? stats.day : []
+          let totalTransfers = 0, totalBytes = 0, lastUpdated = 0
+          for (const k in files) {
+            const f = files[k] || {}
+            totalTransfers += f.total || 0
+            totalBytes += f.total_bytes || 0
+            if (typeof f.last_modified === 'number' && f.last_modified > lastUpdated) lastUpdated = f.last_modified
+          }
+          return {
+            uniqueFiles: Object.keys(files).length,
+            uniqueUsers: Object.keys(users).length,
+            totalTransfers,
+            totalBytes,
+            lastUpdated,
+            dayOfWeek: (day.length >= 7 ? day.slice(0, 7) : [0, 0, 0, 0, 0, 0, 0])
+          }
+        }
+
+        function computeTopUsers(stats, limit) {
+          const users = stats.user || {}
+          const arr = Object.entries(users).map(([name, u]) => ({
+            name, total: u.total || 0, total_bytes: u.total_bytes || 0, last_file: u.last_file || null
+          }))
+          arr.sort((a, b) => (b.total_bytes - a.total_bytes) || (b.total - a.total))
+          return arr.slice(0, limit)
+        }
+        function computeTopFiles(stats, limit) {
+          const files = stats.file || {}
+          const arr = Object.entries(files).map(([real_path, f]) => ({
+            real_path,
+            display: f.virtual_path || real_path,
+            total: f.total || 0,
+            total_bytes: f.total_bytes || 0,
+            last_user: f.last_user || null,
+            last_modified: f.last_modified || 0
+          }))
+          arr.sort((a, b) => (b.total_bytes - a.total_bytes) || (b.total - a.total))
+          return arr.slice(0, limit)
+        }
+        function computeRecent(stats, limit) {
+          const files = stats.file || {}
+          const arr = Object.entries(files).map(([real_path, f]) => ({
+            real_path,
+            display: f.virtual_path || real_path,
+            last_user: f.last_user || null,
+            last_modified: f.last_modified || 0,
+            total_bytes: f.total_bytes || 0
+          }))
+          arr.sort((a, b) => (b.last_modified - a.last_modified))
+          return arr.slice(0, limit)
+        }
+        function computeExts(stats) {
+          const files = stats.file || {}
+          const map = {}
+          for (const k in files) {
+            const ext = getExt(k)
+            map[ext] = (map[ext] || 0) + (files[k].total_bytes || 0)
+          }
+          const arr = Object.entries(map).map(([ext, bytes]) => ({ ext, bytes }))
+          arr.sort((a, b) => b.bytes - a.bytes)
+          return arr
+        }
+
+        function makeUsersChart(data) {
+          const ctx = document.getElementById('usersChart')
+          if (usersChart) usersChart.destroy()
+          usersChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: data.map(d => d.name),
+              datasets: [{ label: 'Bytes', data: data.map(d => d.total_bytes), backgroundColor: 'rgba(99,102,241,.6)', borderColor: 'rgb(99,102,241)', borderWidth: 1 }]
+            },
+            options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { callback: v => formatBytes(v) } } } }
+          })
+        }
+        function makeExtChart(data) {
+          const ctx = document.getElementById('extChart')
+          if (extChart) extChart.destroy()
+          const colors = ['#22c55e', '#eab308', '#ef4444', '#06b6d4', '#a855f7', '#f97316', '#10b981', '#3b82f6', '#f43f5e', '#8b5cf6']
+          extChart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+              labels: data.map(d => d.ext),
+              datasets: [{ data: data.map(d => d.bytes), backgroundColor: data.map((_, i) => colors[i % colors.length]) }]
+            }
+          })
+        }
+        function makeDowChart(arr) {
+          const ctx = document.getElementById('dowChart')
+          if (dowChart) dowChart.destroy()
+          const labels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+          const data = Array.isArray(arr) ? arr.slice(0, 7) : [0, 0, 0, 0, 0, 0, 0]
+          dowChart = new Chart(ctx, {
+            type: 'bar',
+            data: { labels, datasets: [{ label: 'Transfers', data, backgroundColor: 'rgba(16,185,129,.6)', borderColor: 'rgb(16,185,129)' }] },
+            options: { plugins: { legend: { display: false } } }
+          })
+        }
+
+        async function renderAll() {
+          if (!raw.value) return
+          summary.value = summarize(raw.value)
+          topUsers.value = computeTopUsers(raw.value, userLimit.value)
+          topFiles.value = computeTopFiles(raw.value, fileLimit.value)
+          recent.value = computeRecent(raw.value, 15)
+          loaded.value = true
+          await nextTick()
+          makeUsersChart(topUsers.value)
+          makeExtChart(computeExts(raw.value).slice(0, 8))
+          makeDowChart(summary.value.dayOfWeek)
+        }
+
+        // auto-loading removed
+
+        function pickFile() {
+          document.getElementById('file').click()
+        }
+        function onPickFile(ev) {
+          error.value = ''
+          const file = ev.target.files && ev.target.files[0]
+          if (!file) return
+          const reader = new FileReader()
+          reader.onload = () => {
+            try {
+              raw.value = JSON.parse(String(reader.result || '{}'))
+              renderAll()
+            } catch (e) {
+              error.value = 'Invalid JSON file.'
+            }
+          }
+          reader.onerror = () => error.value = 'Failed to read file.'
+          reader.readAsText(file)
+        }
+
+        function refresh() {
+          if (raw.value) renderAll()
+          else pickFile()
+        }
+
+        // init: prompt the user to pick a file
+        error.value = 'Please select your stats.json file to begin.'
+        setTimeout(() => { try { pickFile() } catch (_) { } }, 0)
+
+        return { loaded, error, summary, topUsers, topFiles, recent, userLimit, fileLimit, lastUpdatedText, formatBytes, formatNumber, timeAgo, pickFile, onPickFile, refresh, renderAll }
+      }
+    }).mount('#app');
+  </script>
+</body>
+
+</html>
